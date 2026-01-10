@@ -41,7 +41,7 @@ def get_saudi_symbols():
     return get_symbols("https://ar.tradingview.com/markets/stocks-ksa/market-movers-all-stocks/", ".TADAWUL")
 
 def get_us_symbols():
-    return get_symbols("p")
+    return get_symbols("https://ar.tradingview.com/markets/stocks-usa/market-movers-all-stocks/")
 
 # ===== اختيار السوق =====
 market = st.selectbox("اختر السوق", ["السعودي", "الأمريكي", "الكل"])
