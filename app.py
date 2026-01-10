@@ -1,90 +1,94 @@
 import streamlit as st
-from bs4 import BeautifulSoup
 import pandas as pd
+import yfinance as yf
 
-# ---------- 1. HTML الجدول ----------
-html_content = """ضع هنا الـ HTML الكامل للجدول"""
+st.set_page_config(layout="wide")
+st.title("📊 داشبورد فرص المضاربة")
 
-# ---------- 2. استخراج البيانات ----------
-soup = BeautifulSoup(html_content, 'html.parser')
-rows = soup.find_all('tr', class_='row-RdUXZpkv')
+# -----------------------------
+# RSI
+# -----------------------------
+def calculate_rsi(series, period=14):
+    delta = series.diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.rolling(period).mean()
+    avg_loss = loss.rolling(period).mean()
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
 
-data = []
-for row in rows:
-    symbol_tag = row.find('a', class_='tickerName-GrtoTeat')
-    company_tag = row.find('a', class_='tickerDescription-GrtoTeat')
-    
-    row_data = {}
-    row_data['Symbol'] = symbol_tag.get_text(strip=True) if symbol_tag else ''
-    row_data['Company'] = company_tag.get_text(strip=True) if company_tag else ''
-    
-    # إضافة بقية الأعمدة
-    for td in row.find_all('td'):
-        field = td.get('data-field')
-        if not field:
-            continue
-        text = td.get_text(strip=True)
-        row_data[field] = text
-    
-    if row_data:
-        data.append(row_data)
+# -----------------------------
+# Signal
+# -----------------------------
+def technical_signal(price, sma, rsi):
+    if price > sma and rsi < 70:
+        return "Buy"
+    elif price < sma and rsi > 30:
+        return "Sell"
+    else:
+        return "Neutral"
 
-df = pd.DataFrame(data)
+# -----------------------------
+# تصنيف الفرصة
+# -----------------------------
+def opportunity(signal):
+    if signal == "Buy":
+        return "فرصة مضاربية"
+    elif signal == "Neutral":
+        return "انتظار"
+    else:
+        return "عدم دخول"
 
-# ---------- 3. تحويل الأعمدة الرقمية ----------
-numeric_cols = ['Price', 'Change|TimeResolution1D', 'Volume|TimeResolution1D', 
-                'RelativeVolume|TimeResolution1D', 'MarketCap', 
-                'PriceToEarnings', 'EpsDiluted|ttm', 'EpsDilutedGrowth|YoYTTM', 
-                'DividendsYield|ttm']
+# -----------------------------
+# رموز تجريبية (لاحقًا نربطها تلقائيًا)
+# -----------------------------
+symbols = [
+    "1010.SR", "2222.SR", "2010.SR",
+    "AAPL", "MSFT", "NVDA"
+]
 
-for col in numeric_cols:
-    if col in df.columns:
-        df[col] = df[col].str.replace('%','').str.replace(',','').str.replace('SAR','').astype(float, errors='ignore')
+rows = []
 
-# ---------- 4. حساب عمود Signal ----------
-def compute_signal(row):
+for symbol in symbols:
     try:
-        change = float(row.get('Change|TimeResolution1D', 0))
-        eps_growth = float(row.get('EpsDilutedGrowth|YoYTTM', 0))
-        pe_ratio = float(row.get('PriceToEarnings', 0))
+        stock = yf.Ticker(symbol)
+        hist = stock.history(period="1mo")
 
-        # قاعدة لتحديد الإشارة
-        if change > 1 and eps_growth > 5 and pe_ratio < 20:
-            return 'Buy'
-        elif change < -1 and eps_growth < 0:
-            return 'Sell'
-        else:
-            return 'Neutral'
-    except:
-        return 'Neutral'
+        if hist.empty:
+            continue
 
-df['Signal'] = df.apply(compute_signal, axis=1)
+        close = hist["Close"]
+        price = round(close.iloc[-1], 2)
+        sma20 = round(close.rolling(20).mean().iloc[-1], 2)
+        rsi14 = round(calculate_rsi(close).iloc[-1], 2)
 
-# ---------- 5. داشبورد Streamlit ----------
-st.title("Stock Dashboard")
+        signal = technical_signal(price, sma20, rsi14)
+        opp = opportunity(signal)
 
-# تصفية حسب Signal
-signal_filter = st.selectbox("عرض الأسهم حسب الإشارة:", ['All', 'Buy', 'Sell', 'Neutral'])
-if signal_filter != 'All':
-    df_display = df[df['Signal'] == signal_filter]
-else:
-    df_display = df
+        entry = round(price * 0.99, 2) if signal == "Buy" else None
+        target = round(price * 1.05, 2) if signal == "Buy" else None
 
-# ---------- 6. تلوين الصفوف ----------
-def highlight_signal(row):
-    color = ''
-    if row['Signal'] == 'Buy':
-        color = 'background-color: #b6f0b6'  # أخضر فاتح
-    elif row['Signal'] == 'Sell':
-        color = 'background-color: #f0b6b6'  # أحمر فاتح
-    elif row['Signal'] == 'Neutral':
-        color = 'background-color: #f0f0b6'  # أصفر فاتح
-    return [color]*len(row)
+        rows.append({
+            "الرمز": symbol,
+            "السعر": price,
+            "SMA20": sma20,
+            "RSI": rsi14,
+            "الإشارة": signal,
+            "التصنيف": opp,
+            "سعر الدخول": entry,
+            "سعر جني الربح": target,
+            "تنبيه": "🔥 شراء الآن" if signal == "Buy" else ""
+        })
 
-# عرض الجدول مع التلوين
-st.dataframe(df_display.style.apply(highlight_signal, axis=1))
+    except Exception:
+        continue
 
-# اختيار سهم لعرض التفاصيل
-selected_symbol = st.selectbox("اختر السهم لعرض التفاصيل:", df_display['Symbol'])
-if selected_symbol:
-    st.write(df_display[df_display['Symbol'] == selected_symbol].T)  # عرض التفاصيل عمودياً
+df = pd.DataFrame(rows)
+
+# -----------------------------
+# فلاتر الواجهة
+# -----------------------------
+col1, col2 = st.columns(2)
+
+with col1:
+    refre
