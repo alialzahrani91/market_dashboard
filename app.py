@@ -87,4 +87,32 @@ def add_trading_signals(df):
                 "Strength": "🔴 ضعيف"
             })
 
-    return pd.concat
+    return pd.concat([df.reset_index(drop=True), pd.DataFrame(signals)], axis=1)
+
+
+# =============================
+# الواجهة
+# =============================
+st.title("📊 Dashboard الفرص المضاربية")
+
+with st.spinner("جلب البيانات..."):
+    df_sa = fetch_tradingview_stocks(
+        "https://ar.tradingview.com/markets/stocks-ksa/market-movers-all-stocks/",
+        "TADAWUL"
+    )
+
+    df_us = fetch_tradingview_stocks(
+        "https://ar.tradingview.com/markets/stocks-usa/market-movers-all-stocks/",
+        "NYSE"
+    )
+
+df = pd.concat([df_sa, df_us], ignore_index=True)
+df = add_trading_signals(df)
+
+st.success(f"تم تحميل {len(df)} سهم")
+
+st.dataframe(
+    df,
+    use_container_width=True,
+    hide_index=True
+)
