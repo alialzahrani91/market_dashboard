@@ -1,123 +1,90 @@
 import streamlit as st
+import requests
 import pandas as pd
-import yfinance as yf
+from bs4 import BeautifulSoup
 
-st.set_page_config(layout="wide")
-st.title("📊 داشبورد فرص المضاربة")
+st.set_page_config(page_title="Market Dashboard", layout="wide")
 
-# -----------------------------
-# RSI
-# -----------------------------
-def calculate_rsi(series, period=14):
-    delta = series.diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
-    avg_gain = gain.rolling(period).mean()
-    avg_loss = loss.rolling(period).mean()
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
+# =============================
+# جلب البيانات من TradingView
+# =============================
+def fetch_tradingview_stocks(url, market_suffix):
+    headers = {"User-Agent": "Mozilla/5.0"}
+    r = requests.get(url, headers=headers, timeout=15)
+    r.raise_for_status()
 
-# -----------------------------
-# Signal
-# -----------------------------
-def technical_signal(price, sma, rsi):
-    if price > sma and rsi < 70:
-        return "Buy"
-    elif price < sma and rsi > 30:
-        return "Sell"
-    else:
-        return "Neutral"
+    soup = BeautifulSoup(r.text, "html.parser")
+    rows = soup.select("tr.row-RdUXZpkv")
 
-# -----------------------------
-# تصنيف الفرصة
-# -----------------------------
-def opportunity(signal):
-    if signal == "Buy":
-        return "فرصة مضاربية"
-    elif signal == "Neutral":
-        return "انتظار"
-    else:
-        return "عدم دخول"
+    data = []
 
-# -----------------------------
-# رموز تجريبية (لاحقًا نربطها تلقائيًا)
-# -----------------------------
-symbols = [
-    "1010.SR", "2222.SR", "2010.SR",
-    "AAPL", "MSFT", "NVDA"
-]
+    for row in rows:
+        try:
+            symbol_tag = row.select_one("a.tickerNameBox-GrtoTeat")
+            name_tag   = row.select_one("a.tickerDescription-GrtoTeat")
 
-rows = []
+            price_tag  = row.select_one("td[data-field='Price']")
+            change_tag = row.select_one("td[data-field='Change|TimeResolution1D']")
+            volume_tag = row.select_one("td[data-field='RelativeVolume|TimeResolution1D']")
 
-for symbol in symbols:
-    try:
-        stock = yf.Ticker(symbol)
-        hist = stock.history(period="1mo")
+            if not symbol_tag or not price_tag:
+                continue
 
-        if hist.empty:
+            symbol = symbol_tag.text.strip()
+            name = name_tag.text.strip() if name_tag else ""
+
+            price = float(price_tag.text.replace(",", ""))
+            change = float(change_tag.text.replace("%", "")) if change_tag else 0
+            rel_volume = float(volume_tag.text) if volume_tag else 0
+
+            data.append({
+                "Symbol": f"{symbol}.{market_suffix}",
+                "Company": name,
+                "Price": price,
+                "Change %": change,
+                "Relative Volume": rel_volume
+            })
+
+        except Exception:
             continue
 
-        close = hist["Close"]
-        price = round(close.iloc[-1], 2)
-        sma20 = round(close.rolling(20).mean().iloc[-1], 2)
-        rsi14 = round(calculate_rsi(close).iloc[-1], 2)
+    return pd.DataFrame(data)
 
-        signal = technical_signal(price, sma20, rsi14)
-        opp = opportunity(signal)
 
-        entry = round(price * 0.99, 2) if signal == "Buy" else None
-        target = round(price * 1.05, 2) if signal == "Buy" else None
+# =============================
+# حساب إشارات التداول
+# =============================
+def add_trading_signals(df):
+    signals = []
 
-        rows.append({
-            "الرمز": symbol,
-            "السعر": price,
-            "SMA20": sma20,
-            "RSI": rsi14,
-            "الإشارة": signal,
-            "التصنيف": opp,
-            "سعر الدخول": entry,
-            "سعر جني الربح": target,
-            "تنبيه": "🔥 شراء الآن" if signal == "Buy" else ""
-        })
+    for _, row in df.iterrows():
+        price = row["Price"]
+        change = row["Change %"]
+        rv = row["Relative Volume"]
 
-    except Exception:
-        continue
+        if change > 2 and rv > 1.5:
+            signals.append({
+                "Opportunity": "✅ نعم",
+                "Entry Price": round(price, 2),
+                "Take Profit": round(price * 1.05, 2),
+                "Stop Loss": round(price * 0.975, 2),
+                "Strength": "⭐ قوي"
+            })
+        elif change > 0:
+            signals.append({
+                "Opportunity": "⚠️ مراقبة",
+                "Entry Price": None,
+                "Take Profit": None,
+                "Stop Loss": None,
+                "Strength": "🟡 متوسط"
+            })
+        else:
+            signals.append({
+                "Opportunity": "❌ لا",
+                "Entry Price": None,
+                "Take Profit": None,
+                "Stop Loss": None,
+                "Strength": "🔴 ضعيف"
+            })
 
-df = pd.DataFrame(rows)
-
-# -----------------------------
-# فلاتر الواجهة
-# -----------------------------
-col1, col2 = st.columns(2)
-
-with col1:
-    refresh = st.button("🔄 تحديث")
-
-with col2:
-    buy_only = st.checkbox("🔥 عرض فرص الشراء فقط")
-
-if refresh:
-    st.experimental_rerun()
-
-if buy_only:
-    df = df[df["تنبيه"] == "🔥 شراء الآن"]
-
-# -----------------------------
-# تلوين الجدول
-# -----------------------------
-def color(val):
-    if val in ["Buy", "فرصة مضاربية", "🔥 شراء الآن"]:
-        return "background-color:#a6f4a6;font-weight:bold"
-    if val in ["Sell", "عدم دخول"]:
-        return "background-color:#f4a6a6"
-    if val == "Neutral":
-        return "background-color:#fff3a6"
-    return ""
-
-st.dataframe(
-    df.style.applymap(
-        color,
-        subset=["الإشارة", "التصنيف", "تنبيه"]
-    ),
-    use_container_width=True
-)
+    return pd.concat
