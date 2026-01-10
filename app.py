@@ -1,28 +1,17 @@
 import streamlit as st
 import requests
 from bs4 import BeautifulSoup
+import yfinance as yf
 import pandas as pd
-import hashlib
 
-# ===== حماية Dashboard بكلمة مرور =====
-PASSWORD_HASH = hashlib.sha256("mypassword123".encode()).hexdigest()
-def check_password():
-    st.sidebar.header("🔐 تسجيل الدخول")
-    password = st.sidebar.text_input("كلمة المرور", type="password")
-    if hashlib.sha256(password.encode()).hexdigest() == PASSWORD_HASH:
-        return True
-    return False
+st.set_page_config(page_title="Stock Dashboard", layout="wide")
+st.title("📊 سوق الأسهم - السعودية و أمريكا")
 
-if not check_password():
-    st.warning("❌ كلمة المرور غير صحيحة")
-    st.stop()
-
-st.set_page_config(page_title="Market Scanner", layout="wide")
-st.title("📊 Market Scanner Dashboard - Saudi & US Stocks")
-
-# ===== دالة جلب الأسهم وفصل الرمز عن الاسم =====
+# ======================
+# دالة لجلب الرموز والأسماء من TradingView
+# ======================
 @st.cache_data(ttl=24*3600)
-def get_symbols(url, suffix=""):
+def get_symbols_tradingview(url, suffix=""):
     res = requests.get(url)
     if res.status_code != 200:
         st.warning(f"⚠️ تعذر جلب الأسهم من {url}")
@@ -32,41 +21,57 @@ def get_symbols(url, suffix=""):
     symbols = []
 
     for row in soup.select("table tbody tr"):
-        cells = row.find_all("td")
-        if len(cells) >= 2:
-            symbol = cells[0].get_text(strip=True) + suffix
-            name = cells[1].get_text(strip=True)
-            symbols.append({"symbol": symbol, "name": name})
-        elif len(cells) == 1:
-            parts = cells[0].get_text(strip=True).split(".")
-            symbol = parts[0] + (suffix if len(parts) > 1 else "")
-            name = parts[1] if len(parts) > 1 else ""
-            symbols.append({"symbol": symbol, "name": name})
+        cell = row.find("td", class_="cell-RLhfr_y4")
+        if cell:
+            symbol_tag = cell.find("a", class_="tickerName-GrtoTeat")
+            name_tag = cell.find("a", class_="tickerDescription-GrtoTeat")
+            if symbol_tag and name_tag:
+                symbol = symbol_tag.text.strip() + suffix
+                name = name_tag.text.strip()
+                symbols.append({"symbol": symbol, "name": name})
 
     return symbols
 
-def get_saudi_symbols():
-    return get_symbols("https://ar.tradingview.com/markets/stocks-ksa/market-movers-all-stocks/", ".TADAWUL")
+# ======================
+# جلب الأسهم
+# ======================
+st.info("🔄 جلب الأسهم من TradingView...")
+saudi_symbols = get_symbols_tradingview(
+    "https://ar.tradingview.com/markets/stocks-ksa/market-movers-all-stocks/",
+    ".TADAWUL"
+)
+us_symbols = get_symbols_tradingview(
+    "https://ar.tradingview.com/markets/stocks-usa/market-movers-all-stocks/"
+)
 
-def get_us_symbols():
-    return get_symbols("https://ar.tradingview.com/markets/stocks-usa/market-movers-all-stocks/")
+all_symbols = saudi_symbols + us_symbols
 
-# ===== اختيار السوق =====
-market = st.selectbox("اختر السوق", ["السعودي", "الأمريكي", "الكل"])
+if not all_symbols:
+    st.error("⚠️ تعذر جلب أي أسهم.")
+    st.stop()
 
-symbols = []
-if market == "السعودي":
-    symbols = get_saudi_symbols()
-elif market == "الأمريكي":
-    symbols = get_us_symbols()
-else:
-    symbols = get_saudi_symbols() + get_us_symbols()
+# ======================
+# جدول DataFrame للعرض
+# ======================
+df = pd.DataFrame(all_symbols)
+df["Price"] = ""  # عمود فارغ للسعر
 
-st.info(f"⏳ جاري تحضير قائمة {len(symbols)} سهم من {market}...")
+# ======================
+# جلب الأسعار الحالية باستخدام yfinance
+# ======================
+st.info("💹 جلب الأسعار الحالية للأسهم...")
+for i, row in df.iterrows():
+    try:
+        ticker = yf.Ticker(row["symbol"])
+        price = ticker.history(period="1d")["Close"].iloc[-1]
+        df.at[i, "Price"] = round(price, 2)
+    except Exception as e:
+        df.at[i, "Price"] = "N/A"
 
-# ===== عرض النتائج =====
-if symbols:
-    df_results = pd.DataFrame(symbols)
-    st.dataframe(df_results, use_container_width=True)
-else:
-    st.warning("❌ لم يتم العثور على أي أسهم حالياً")
+# ======================
+# فلترة وواجهة Dashboard
+# ======================
+st.subheader("قائمة الأسهم")
+st.dataframe(df, use_container_width=True)
+
+st.success(f"✅ تم جلب {len(df)} سهم بنجاح!")
