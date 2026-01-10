@@ -1,93 +1,72 @@
 import streamlit as st
 import requests
 import pandas as pd
-from bs4 import BeautifulSoup
 
 st.set_page_config(page_title="Market Dashboard", layout="wide")
 
 # =============================
-# جلب البيانات من TradingView
+# TradingView Scanner API
 # =============================
-def fetch_tradingview_stocks(url, market_suffix):
-    headers = {"User-Agent": "Mozilla/5.0"}
-    r = requests.get(url, headers=headers, timeout=15)
+def fetch_market(market):
+    url = f"https://scanner.tradingview.com/{market}/scan"
+
+    payload = {
+        "filter": [],
+        "symbols": {"query": {"types": []}, "tickers": []},
+        "columns": [
+            "name",
+            "description",
+            "close",
+            "change",
+            "relative_volume_10d_calc"
+        ],
+        "sort": {"sortBy": "change", "sortOrder": "desc"},
+        "range": [0, 300]
+    }
+
+    r = requests.post(url, json=payload, timeout=15)
     r.raise_for_status()
 
-    soup = BeautifulSoup(r.text, "html.parser")
-    rows = soup.select("tr.row-RdUXZpkv")
+    data = r.json()["data"]
 
-    data = []
+    rows = []
+    for d in data:
+        rows.append({
+            "Symbol": d["s"],
+            "Company": d["d"][1],
+            "Price": d["d"][2],
+            "Change %": d["d"][3],
+            "Relative Volume": d["d"][4]
+        })
 
-    for row in rows:
-        try:
-            symbol_tag = row.select_one("a.tickerNameBox-GrtoTeat")
-            name_tag   = row.select_one("a.tickerDescription-GrtoTeat")
-
-            price_tag  = row.select_one("td[data-field='Price']")
-            change_tag = row.select_one("td[data-field='Change|TimeResolution1D']")
-            volume_tag = row.select_one("td[data-field='RelativeVolume|TimeResolution1D']")
-
-            if not symbol_tag or not price_tag:
-                continue
-
-            symbol = symbol_tag.text.strip()
-            name = name_tag.text.strip() if name_tag else ""
-
-            price = float(price_tag.text.replace(",", ""))
-            change = float(change_tag.text.replace("%", "")) if change_tag else 0
-            rel_volume = float(volume_tag.text) if volume_tag else 0
-
-            data.append({
-                "Symbol": f"{symbol}.{market_suffix}",
-                "Company": name,
-                "Price": price,
-                "Change %": change,
-                "Relative Volume": rel_volume
-            })
-
-        except Exception:
-            continue
-
-    return pd.DataFrame(data)
+    return pd.DataFrame(rows)
 
 
 # =============================
-# حساب إشارات التداول
+# إشارات التداول
 # =============================
-def add_trading_signals(df):
+def add_signals(df):
     signals = []
 
-    for _, row in df.iterrows():
-        price = row["Price"]
-        change = row["Change %"]
-        rv = row["Relative Volume"]
+    for _, r in df.iterrows():
+        price = r["Price"]
+        ch = r["Change %"]
+        rv = r["Relative Volume"]
 
-        if change > 2 and rv > 1.5:
-            signals.append({
-                "Opportunity": "✅ نعم",
-                "Entry Price": round(price, 2),
-                "Take Profit": round(price * 1.05, 2),
-                "Stop Loss": round(price * 0.975, 2),
-                "Strength": "⭐ قوي"
-            })
-        elif change > 0:
-            signals.append({
-                "Opportunity": "⚠️ مراقبة",
-                "Entry Price": None,
-                "Take Profit": None,
-                "Stop Loss": None,
-                "Strength": "🟡 متوسط"
-            })
+        if ch > 2 and rv > 1.5:
+            signals.append(("🔥 شراء", price, price * 1.05, price * 0.975, "⭐ قوي"))
+        elif ch > 0:
+            signals.append(("⚠️ مراقبة", None, None, None, "🟡 متوسط"))
         else:
-            signals.append({
-                "Opportunity": "❌ لا",
-                "Entry Price": None,
-                "Take Profit": None,
-                "Stop Loss": None,
-                "Strength": "🔴 ضعيف"
-            })
+            signals.append(("❌ لا", None, None, None, "🔴 ضعيف"))
 
-    return pd.concat([df.reset_index(drop=True), pd.DataFrame(signals)], axis=1)
+    df["إشارة"] = [s[0] for s in signals]
+    df["سعر الدخول"] = [round(s[1], 2) if s[1] else None for s in signals]
+    df["جني الأرباح"] = [round(s[2], 2) if s[2] else None for s in signals]
+    df["وقف الخسارة"] = [round(s[3], 2) if s[3] else None for s in signals]
+    df["قوة السهم"] = [s[4] for s in signals]
+
+    return df
 
 
 # =============================
@@ -95,24 +74,13 @@ def add_trading_signals(df):
 # =============================
 st.title("📊 Dashboard الفرص المضاربية")
 
-with st.spinner("جلب البيانات..."):
-    df_sa = fetch_tradingview_stocks(
-        "https://ar.tradingview.com/markets/stocks-ksa/market-movers-all-stocks/",
-        "TADAWUL"
-    )
+with st.spinner("جلب السوق السعودي والأمريكي..."):
+    saudi = fetch_market("saudi")
+    usa = fetch_market("america")
 
-    df_us = fetch_tradingview_stocks(
-        "https://ar.tradingview.com/markets/stocks-usa/market-movers-all-stocks/",
-        "NYSE"
-    )
-
-df = pd.concat([df_sa, df_us], ignore_index=True)
-df = add_trading_signals(df)
+df = pd.concat([saudi, usa], ignore_index=True)
+df = add_signals(df)
 
 st.success(f"تم تحميل {len(df)} سهم")
 
-st.dataframe(
-    df,
-    use_container_width=True,
-    hide_index=True
-)
+st.dataframe(df, use_container_width=True, hide_index=True)
