@@ -1,94 +1,83 @@
 import streamlit as st
-import requests
 import pandas as pd
+import yfinance as yf
 
-st.set_page_config(page_title="Market Dashboard", layout="wide")
-
-HEADERS = {
-    "User-Agent": "Mozilla/5.0",
-    "Content-Type": "application/json"
-}
-
-# =============================
-# TradingView Scanner API
-# =============================
+# ---------------------------
+# 1️⃣ دالة لجلب البيانات
+# ---------------------------
 def fetch_market(market):
-    url = f"https://scanner.tradingview.com/{market}/scan"
+    if market == "saudi":
+        tickers = ["1010.SR", "1050.SR"]  # ضع رموز السوق السعودي هنا
+    elif market == "usa":
+        tickers = ["AAPL", "TSLA"]       # ضع رموز السوق الأمريكي هنا
+    else:
+        tickers = []
+    
+    data_list = []
+    for ticker in tickers:
+        try:
+            stock = yf.Ticker(ticker)
+            info = stock.info
+            data_list.append({
+                "رمز": ticker,
+                "اسم": info.get("shortName", "N/A"),
+                "Price": info.get("regularMarketPrice", 0),
+                "إشارة": "🔥 شراء" if info.get("regularMarketChangePercent", 0) > 0 else "⚡ مراقبة",
+                "Market": "السوق السعودي" if market=="saudi" else "السوق الأمريكي"
+            })
+        except Exception as e:
+            st.error(f"خطأ في جلب {ticker}: {e}")
+    
+    return pd.DataFrame(data_list)
 
-    payload = {
-        "filter": [],
-        "symbols": {"query": {"types": []}, "tickers": []},
-        "columns": [
-            "name",
-            "description",
-            "close",
-            "change",
-            "relative_volume_10d_calc"
-        ],
-        "sort": {"sortBy": "change", "sortOrder": "desc"},
-        "range": [0, 300]
-    }
-
-    r = requests.post(url, json=payload, headers=HEADERS, timeout=15)
-
-    if r.status_code != 200:
-        st.warning(f"⚠️ تعذر جلب سوق {market}")
-        return pd.DataFrame()
-
-    data = r.json().get("data", [])
-
-    rows = []
-    for d in data:
-        rows.append({
-            "Symbol": d["s"],
-            "Company": d["d"][1],
-            "Price": d["d"][2],
-            "Change %": d["d"][3],
-            "Relative Volume": d["d"][4]
-        })
-
-    return pd.DataFrame(rows)
-
-
-# =============================
-# إشارات التداول
-# =============================
-def add_signals(df):
-    if df.empty:
-        return df
-
-    df["إشارة"] = "❌ لا"
-    df["سعر الدخول"] = None
-    df["جني الأرباح"] = None
-    df["وقف الخسارة"] = None
-    df["قوة السهم"] = "🔴 ضعيف"
-
-    buy = (df["Change %"] > 2) & (df["Relative Volume"] > 1.5)
-
-    df.loc[buy, "إشارة"] = "🔥 شراء"
-    df.loc[buy, "سعر الدخول"] = df["Price"]
-    df.loc[buy, "جني الأرباح"] = (df["Price"] * 1.05).round(2)
-    df.loc[buy, "وقف الخسارة"] = (df["Price"] * 0.975).round(2)
-    df.loc[buy, "قوة السهم"] = "⭐ قوي"
-
+# ---------------------------
+# 2️⃣ دالة لتحديد المضاربة
+# ---------------------------
+def add_signal(df):
+    df["مضاربي"] = df["إشارة"].apply(lambda x: True if x == "🔥 شراء" else False)
     return df
 
+# ---------------------------
+# 3️⃣ دالة لحساب سعر الدخول وسعر الجني
+# ---------------------------
+def add_entry_takeprofit(df):
+    df["سعر الدخول"] = df["Price"] * 0.995  # 0.5% أقل من السعر الحالي
+    df["سعر الجني"]  = df["Price"] * 1.03   # 3% أعلى من السعر الحالي
+    return df
 
-# =============================
-# الواجهة
-# =============================
-st.title("📊 Dashboard الفرص المضاربية")
+# ---------------------------
+# 4️⃣ واجهة Streamlit
+# ---------------------------
+st.set_page_config(page_title="Market Dashboard", layout="wide")
+st.title("📊 لوحة بيانات السوق")
 
-with st.spinner("جلب السوق السعودي والأمريكي..."):
-    saudi = fetch_market("ksa")
-    usa = fetch_market("america")
+# الفلاتر في Sidebar
+st.sidebar.title("🎛️ الفلاتر")
+market_filter = st.sidebar.selectbox(
+    "اختر السوق",
+    ["الكل", "السوق السعودي", "السوق الأمريكي"]
+)
+speculative_only = st.sidebar.checkbox("💥 عرض المضاربة فقط")
 
+# جلب البيانات
+saudi = fetch_market("saudi")
+usa = fetch_market("usa")
 df = pd.concat([saudi, usa], ignore_index=True)
-df = add_signals(df)
 
-if df.empty:
-    st.error("❌ لم يتم جلب أي بيانات من TradingView")
-    st.stop()
+# إضافة تصنيف المضاربة وأسعار الدخول والجني
+df = add_signal(df)
+df = add_entry_takeprofit(df)
 
-st.success(f"تم تحميل {len(df)} سهم")
-st.dataframe(df, use_container_width=True, hide_index=True)
+# تطبيق فلتر السوق
+if market_filter != "الكل":
+    df = df[df["Market"] == market_filter]
+
+# تطبيق فلتر المضاربة فقط
+if speculative_only:
+    df = df[df["مضاربي"] == True]
+
+# ترتيب الأعمدة للعرض
+df = df[["رمز", "اسم", "Price", "إشارة", "مضاربي", "سعر الدخول", "سعر الجني", "Market"]]
+
+# عرض الجدول
+st.dataframe(df)
