@@ -1,97 +1,90 @@
 import streamlit as st
-import pandas as pd
-import requests
 from bs4 import BeautifulSoup
-from datetime import datetime
-from streamlit_autorefresh import st_autorefresh
+import pandas as pd
 
-st.set_page_config(page_title="Realtime Stock Dashboard", layout="wide")
-st.title("📊 Saudi & US Stocks Dashboard (Realtime)")
+# ---------- 1. HTML الجدول ----------
+html_content = """ضع هنا الـ HTML الكامل للجدول"""
 
-st_autorefresh(interval=60_000, key="datarefresh")
+# ---------- 2. استخراج البيانات ----------
+soup = BeautifulSoup(html_content, 'html.parser')
+rows = soup.find_all('tr', class_='row-RdUXZpkv')
 
-def fetch_tradingview(url):
-    headers = {"User-Agent": "Mozilla/5.0"}
-    res = requests.get(url, headers=headers)
-    if res.status_code != 200:
-        st.warning(f"⚠️ لا يمكن الوصول إلى {url}")
-        return pd.DataFrame()
+data = []
+for row in rows:
+    symbol_tag = row.find('a', class_='tickerName-GrtoTeat')
+    company_tag = row.find('a', class_='tickerDescription-GrtoTeat')
     
-    soup = BeautifulSoup(res.text, "html.parser")
-    data = []
-    rows = soup.find_all("td", class_="cell-RLhfr_y4")
-    for row in rows:
-        try:
-            symbol = row.find("a", class_="tickerName-GrtoTeat").text.strip()
-            name = row.find("a", class_="tickerDescription-GrtoTeat").text.strip()
-            price_tag = row.find_next_sibling("td", class_="cell-1xn2qvP4 right-1lRZ6ec")
-            price = price_tag.text.strip() if price_tag else "N/A"
-            change_tag = row.find_next_sibling("td", class_="cell-2snP2mJx right-1lRZ6ec")
-            change = change_tag.text.strip().replace("%","") if change_tag else "0"
-            data.append([symbol, name, price, change])
-        except:
+    row_data = {}
+    row_data['Symbol'] = symbol_tag.get_text(strip=True) if symbol_tag else ''
+    row_data['Company'] = company_tag.get_text(strip=True) if company_tag else ''
+    
+    # إضافة بقية الأعمدة
+    for td in row.find_all('td'):
+        field = td.get('data-field')
+        if not field:
             continue
-    df = pd.DataFrame(data, columns=["Symbol", "Name", "Price", "Change%"])
-    return df
+        text = td.get_text(strip=True)
+        row_data[field] = text
+    
+    if row_data:
+        data.append(row_data)
 
-def classify_stock(change):
+df = pd.DataFrame(data)
+
+# ---------- 3. تحويل الأعمدة الرقمية ----------
+numeric_cols = ['Price', 'Change|TimeResolution1D', 'Volume|TimeResolution1D', 
+                'RelativeVolume|TimeResolution1D', 'MarketCap', 
+                'PriceToEarnings', 'EpsDiluted|ttm', 'EpsDilutedGrowth|YoYTTM', 
+                'DividendsYield|ttm']
+
+for col in numeric_cols:
+    if col in df.columns:
+        df[col] = df[col].str.replace('%','').str.replace(',','').str.replace('SAR','').astype(float, errors='ignore')
+
+# ---------- 4. حساب عمود Signal ----------
+def compute_signal(row):
     try:
-        change = float(change)
-        if change >= 2: return "Strong Buy"
-        elif 0.5 <= change < 2: return "Buy"
-        elif -0.5 < change < 0.5: return "Neutral"
-        elif -2 < change <= -0.5: return "Sell"
-        elif change <= -2: return "Strong Sell"
+        change = float(row.get('Change|TimeResolution1D', 0))
+        eps_growth = float(row.get('EpsDilutedGrowth|YoYTTM', 0))
+        pe_ratio = float(row.get('PriceToEarnings', 0))
+
+        # قاعدة لتحديد الإشارة
+        if change > 1 and eps_growth > 5 and pe_ratio < 20:
+            return 'Buy'
+        elif change < -1 and eps_growth < 0:
+            return 'Sell'
+        else:
+            return 'Neutral'
     except:
-        return "N/A"
+        return 'Neutral'
 
-st.sidebar.header("خيارات السوق")
-market = st.sidebar.selectbox("اختر السوق", ["Saudi", "US", "Both"])
-signal_filter = st.sidebar.multiselect(
-    "فلترة حسب قوة السهم",
-    ["Strong Buy", "Buy", "Neutral", "Sell", "Strong Sell"],
-    default=["Strong Buy", "Buy", "Neutral", "Sell", "Strong Sell"]
-)
-search = st.sidebar.text_input("🔍 بحث عن سهم")
+df['Signal'] = df.apply(compute_signal, axis=1)
 
-if "prev_strong_buy" not in st.session_state:
-    st.session_state.prev_strong_buy = []
+# ---------- 5. داشبورد Streamlit ----------
+st.title("Stock Dashboard")
 
-dfs = []
-if market in ["Saudi", "Both"]:
-    dfs.append(fetch_tradingview("https://ar.tradingview.com/markets/stocks-ksa/market-movers-all-stocks/"))
-if market in ["US", "Both"]:
-    dfs.append(fetch_tradingview("https://ar.tradingview.com/markets/stocks-usa/market-movers-all-stocks/"))
-
-df = pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
-
-if not df.empty:
-    df["Change%"] = pd.to_numeric(df["Change%"], errors="coerce").fillna(0)
-    df["Signal"] = df["Change%"].apply(classify_stock)
-
-    filtered_df = df[
-        (df["Name"].str.contains(search, case=False)) | 
-        (df["Symbol"].str.contains(search, case=False))
-    ]
-    filtered_df = filtered_df[filtered_df["Signal"].isin(signal_filter)]
-
-    st.subheader(f"📋 الأسهم بعد الفلترة (تحديث: {datetime.now().strftime('%H:%M:%S')})")
-    st.dataframe(filtered_df, use_container_width=True)
-
-    st.subheader("🚀 أعلى 5 رابحة")
-    st.table(df.sort_values("Change%", ascending=False).head(5)[["Symbol","Name","Price","Change%","Signal"]])
-
-    st.subheader("📉 أعلى 5 خاسرة")
-    st.table(df.sort_values("Change%", ascending=True).head(5)[["Symbol","Name","Price","Change%","Signal"]])
-
-    current_strong_buy = df[df["Signal"]=="Strong Buy"]["Symbol"].tolist()
-    new_alerts = [s for s in current_strong_buy if s not in st.session_state.prev_strong_buy]
-
-    if new_alerts:
-        st.success(f"🔔 فرص Strong Buy جديدة: {', '.join(new_alerts)}")
-        st.audio("https://www.soundjay.com/button/beep-07.wav")
-
-    st.session_state.prev_strong_buy = current_strong_buy
-
+# تصفية حسب Signal
+signal_filter = st.selectbox("عرض الأسهم حسب الإشارة:", ['All', 'Buy', 'Sell', 'Neutral'])
+if signal_filter != 'All':
+    df_display = df[df['Signal'] == signal_filter]
 else:
-    st.warning("⚠️ لا توجد بيانات حاليا.")
+    df_display = df
+
+# ---------- 6. تلوين الصفوف ----------
+def highlight_signal(row):
+    color = ''
+    if row['Signal'] == 'Buy':
+        color = 'background-color: #b6f0b6'  # أخضر فاتح
+    elif row['Signal'] == 'Sell':
+        color = 'background-color: #f0b6b6'  # أحمر فاتح
+    elif row['Signal'] == 'Neutral':
+        color = 'background-color: #f0f0b6'  # أصفر فاتح
+    return [color]*len(row)
+
+# عرض الجدول مع التلوين
+st.dataframe(df_display.style.apply(highlight_signal, axis=1))
+
+# اختيار سهم لعرض التفاصيل
+selected_symbol = st.selectbox("اختر السهم لعرض التفاصيل:", df_display['Symbol'])
+if selected_symbol:
+    st.write(df_display[df_display['Symbol'] == selected_symbol].T)  # عرض التفاصيل عمودياً
