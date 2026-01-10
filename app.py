@@ -10,20 +10,20 @@ HEADERS = {
 }
 
 # =============================
-# TradingView Scanner API
+# جلب بيانات السوق
 # =============================
 def fetch_market(market):
     url = f"https://scanner.tradingview.com/{market}/scan"
-
     payload = {
         "filter": [],
         "symbols": {"query": {"types": []}, "tickers": []},
         "columns": [
-            "name",
-            "description",
-            "close",
-            "change",
-            "relative_volume_10d_calc"
+            "name",                   # اسم الشركة
+            "description",            # الرمز
+            "close",                  # السعر
+            "change",                 # تغير %
+            "relative_volume_10d_calc", # حجم نسبي
+            "price_earnings_ttm",     # PE
         ],
         "sort": {"sortBy": "change", "sortOrder": "desc"},
         "range": [0, 300]
@@ -45,57 +45,75 @@ def fetch_market(market):
             "Price": d["d"][2],
             "Change %": d["d"][3],
             "Relative Volume": d["d"][4],
-            "Market": market  # إضافة عمود السوق
+            "PE": d["d"][5]
         })
 
     return pd.DataFrame(rows)
 
 
 # =============================
-# إشارات التداول
+# إضافة إشارات وحالة السهم
 # =============================
 def add_signals(df):
     if df.empty:
         return df
 
+    # أعمدة افتراضية
+    df["الحالة"] = "🟡 مراقبة"
     df["إشارة"] = "❌ لا"
     df["سعر الدخول"] = None
     df["جني الأرباح"] = None
     df["وقف الخسارة"] = None
     df["قوة السهم"] = "🔴 ضعيف"
 
-    buy = (df["Change %"] > 2) & (df["Relative Volume"] > 1.5)
+    # شروط الشراء
+    strong_buy = (df["Change %"] > 2) & (df["Relative Volume"] > 1.5) & (df["PE"] < 30)
+    potential_buy = ((df["Change %"] > 1) | (df["Relative Volume"] > 1.2)) & (df["PE"] < 50)
 
-    df.loc[buy, "إشارة"] = "🔥 شراء"
-    df.loc[buy, "سعر الدخول"] = df["Price"]
-    df.loc[buy, "جني الأرباح"] = (df["Price"] * 1.05).round(2)
-    df.loc[buy, "وقف الخسارة"] = (df["Price"] * 0.975).round(2)
-    df.loc[buy, "قوة السهم"] = "⭐ قوي"
+    # تصنيف الحالة
+    df.loc[strong_buy, "الحالة"] = "⭐ قوي للشراء"
+    df.loc[potential_buy & ~strong_buy, "الحالة"] = "⚡ فرصة محتملة"
+    df.loc[df["Change %"] < 0, "الحالة"] = "🔴 ضعيف"
+
+    # قوة السهم
+    df.loc[strong_buy, "قوة السهم"] = "⭐ قوي"
+    df.loc[potential_buy & ~strong_buy, "قوة السهم"] = "⚡ متوسط"
+
+    # إشارات الدخول والجني ووقف الخسارة
+    df.loc[strong_buy, "إشارة"] = "🔥 شراء"
+    df.loc[strong_buy, "سعر الدخول"] = df["Price"]
+    df.loc[strong_buy, "جني الأرباح"] = (df["Price"] * 1.05).round(2)
+    df.loc[strong_buy, "وقف الخسارة"] = (df["Price"] * 0.975).round(2)
+
+    df.loc[potential_buy & ~strong_buy, "إشارة"] = "⚡ متابعة"
+    df.loc[potential_buy & ~strong_buy, "سعر الدخول"] = df["Price"]
+    df.loc[potential_buy & ~strong_buy, "جني الأرباح"] = (df["Price"] * 1.03).round(2)
+    df.loc[potential_buy & ~strong_buy, "وقف الخسارة"] = (df["Price"] * 0.985).round(2)
 
     return df
 
 
 # =============================
-# الواجهة
+# واجهة المستخدم
 # =============================
 st.title("📊 Dashboard الفرص المضاربية")
 
-with st.spinner("جلب السوق السعودي والأمريكي..."):
-    saudi = fetch_market("ksa")
-    usa = fetch_market("america")
+# فلتر السوق
+market_choice = st.selectbox("اختر السوق", ["السعودي", "الأمريكي"])
 
-df = pd.concat([saudi, usa], ignore_index=True)
+with st.spinner(f"جلب بيانات سوق {market_choice}..."):
+    if market_choice == "السعودي":
+        df = fetch_market("ksa")
+    else:
+        df = fetch_market("america")
+
 df = add_signals(df)
 
 if df.empty:
     st.error("❌ لم يتم جلب أي بيانات من TradingView")
     st.stop()
 
-# فلتر السوق
-market_options = df["Market"].unique()
-selected_market = st.selectbox("اختر السوق:", market_options)
+st.success(f"تم تحميل {len(df)} سهم")
 
-filtered_df = df[df["Market"] == selected_market]
-
-st.success(f"تم تحميل {len(filtered_df)} سهم في السوق {selected_market.upper()}")
-st.dataframe(filtered_df, use_container_width=True, hide_index=True)
+# عرض الجدول
+st.dataframe(df, use_container_width=True, hide_index=True)
