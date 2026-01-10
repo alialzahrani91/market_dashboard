@@ -4,6 +4,11 @@ import pandas as pd
 
 st.set_page_config(page_title="Market Dashboard", layout="wide")
 
+HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Content-Type": "application/json"
+}
+
 # =============================
 # TradingView Scanner API
 # =============================
@@ -24,10 +29,13 @@ def fetch_market(market):
         "range": [0, 300]
     }
 
-    r = requests.post(url, json=payload, timeout=15)
-    r.raise_for_status()
+    r = requests.post(url, json=payload, headers=HEADERS, timeout=15)
 
-    data = r.json()["data"]
+    if r.status_code != 200:
+        st.warning(f"⚠️ تعذر جلب سوق {market}")
+        return pd.DataFrame()
+
+    data = r.json().get("data", [])
 
     rows = []
     for d in data:
@@ -46,25 +54,22 @@ def fetch_market(market):
 # إشارات التداول
 # =============================
 def add_signals(df):
-    signals = []
+    if df.empty:
+        return df
 
-    for _, r in df.iterrows():
-        price = r["Price"]
-        ch = r["Change %"]
-        rv = r["Relative Volume"]
+    df["إشارة"] = "❌ لا"
+    df["سعر الدخول"] = None
+    df["جني الأرباح"] = None
+    df["وقف الخسارة"] = None
+    df["قوة السهم"] = "🔴 ضعيف"
 
-        if ch > 2 and rv > 1.5:
-            signals.append(("🔥 شراء", price, price * 1.05, price * 0.975, "⭐ قوي"))
-        elif ch > 0:
-            signals.append(("⚠️ مراقبة", None, None, None, "🟡 متوسط"))
-        else:
-            signals.append(("❌ لا", None, None, None, "🔴 ضعيف"))
+    buy = (df["Change %"] > 2) & (df["Relative Volume"] > 1.5)
 
-    df["إشارة"] = [s[0] for s in signals]
-    df["سعر الدخول"] = [round(s[1], 2) if s[1] else None for s in signals]
-    df["جني الأرباح"] = [round(s[2], 2) if s[2] else None for s in signals]
-    df["وقف الخسارة"] = [round(s[3], 2) if s[3] else None for s in signals]
-    df["قوة السهم"] = [s[4] for s in signals]
+    df.loc[buy, "إشارة"] = "🔥 شراء"
+    df.loc[buy, "سعر الدخول"] = df["Price"]
+    df.loc[buy, "جني الأرباح"] = (df["Price"] * 1.05).round(2)
+    df.loc[buy, "وقف الخسارة"] = (df["Price"] * 0.975).round(2)
+    df.loc[buy, "قوة السهم"] = "⭐ قوي"
 
     return df
 
@@ -75,12 +80,15 @@ def add_signals(df):
 st.title("📊 Dashboard الفرص المضاربية")
 
 with st.spinner("جلب السوق السعودي والأمريكي..."):
-    saudi = fetch_market("saudi")
+    saudi = fetch_market("ksa")
     usa = fetch_market("america")
 
 df = pd.concat([saudi, usa], ignore_index=True)
 df = add_signals(df)
 
-st.success(f"تم تحميل {len(df)} سهم")
+if df.empty:
+    st.error("❌ لم يتم جلب أي بيانات من TradingView")
+    st.stop()
 
+st.success(f"تم تحميل {len(df)} سهم")
 st.dataframe(df, use_container_width=True, hide_index=True)
