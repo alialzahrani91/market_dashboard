@@ -39,4 +39,34 @@ def get_symbols(url, suffix=""):
             symbols.append({"symbol": symbol, "name": name})
         elif len(cells) == 1:
             parts = cells[0].get_text(strip=True).split(".")
-            symb
+            symbol = parts[0] + (suffix if len(parts) > 1 else "")
+            name = parts[1] if len(parts) > 1 else ""
+            symbols.append({"symbol": symbol, "name": name})
+
+    return symbols
+
+def get_saudi_symbols():
+    return get_symbols("https://ar.tradingview.com/markets/stocks-ksa/market-movers-all-stocks/", ".TADAWUL")
+
+def get_us_symbols():
+    return get_symbols("https://ar.tradingview.com/markets/stocks-usa/market-movers-all-stocks/")
+
+# ===== اختيار السوق =====
+market = st.selectbox("اختر السوق", ["السعودي", "الأمريكي", "الكل"])
+
+symbols = []
+if market == "السعودي":
+    symbols = get_saudi_symbols()
+elif market == "الأمريكي":
+    symbols = get_us_symbols()
+else:
+    symbols = get_saudi_symbols() + get_us_symbols()
+
+st.info(f"⏳ جاري تحضير قائمة {len(symbols)} سهم من {market}...")
+
+# ===== عرض النتائج =====
+if symbols:
+    df_results = pd.DataFrame(symbols)
+    st.dataframe(df_results, use_container_width=True)
+else:
+    st.warning("❌ لم يتم العثور على أي أسهم حالياً")
