@@ -91,4 +91,33 @@ df = pd.DataFrame(rows)
 col1, col2 = st.columns(2)
 
 with col1:
-    refre
+    refresh = st.button("🔄 تحديث")
+
+with col2:
+    buy_only = st.checkbox("🔥 عرض فرص الشراء فقط")
+
+if refresh:
+    st.experimental_rerun()
+
+if buy_only:
+    df = df[df["تنبيه"] == "🔥 شراء الآن"]
+
+# -----------------------------
+# تلوين الجدول
+# -----------------------------
+def color(val):
+    if val in ["Buy", "فرصة مضاربية", "🔥 شراء الآن"]:
+        return "background-color:#a6f4a6;font-weight:bold"
+    if val in ["Sell", "عدم دخول"]:
+        return "background-color:#f4a6a6"
+    if val == "Neutral":
+        return "background-color:#fff3a6"
+    return ""
+
+st.dataframe(
+    df.style.applymap(
+        color,
+        subset=["الإشارة", "التصنيف", "تنبيه"]
+    ),
+    use_container_width=True
+)
