@@ -44,7 +44,8 @@ def fetch_market(market):
             "Company": d["d"][1],
             "Price": d["d"][2],
             "Change %": d["d"][3],
-            "Relative Volume": d["d"][4]
+            "Relative Volume": d["d"][4],
+            "Market": market  # إضافة عمود السوق
         })
 
     return pd.DataFrame(rows)
@@ -90,5 +91,11 @@ if df.empty:
     st.error("❌ لم يتم جلب أي بيانات من TradingView")
     st.stop()
 
-st.success(f"تم تحميل {len(df)} سهم")
-st.dataframe(df, use_container_width=True, hide_index=True)
+# فلتر السوق
+market_options = df["Market"].unique()
+selected_market = st.selectbox("اختر السوق:", market_options)
+
+filtered_df = df[df["Market"] == selected_market]
+
+st.success(f"تم تحميل {len(filtered_df)} سهم في السوق {selected_market.upper()}")
+st.dataframe(filtered_df, use_container_width=True, hide_index=True)
