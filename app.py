@@ -1,6 +1,8 @@
 import streamlit as st
 import requests
 import pandas as pd
+from datetime import date
+import os
 
 st.set_page_config(page_title="Market Dashboard", layout="wide")
 
@@ -10,7 +12,7 @@ HEADERS = {
 }
 
 # =============================
-# جلب بيانات السوق
+# جلب بيانات السوق من TradingView
 # =============================
 def fetch_market(market):
     url = f"https://scanner.tradingview.com/{market}/scan"
@@ -18,102 +20,138 @@ def fetch_market(market):
         "filter": [],
         "symbols": {"query": {"types": []}, "tickers": []},
         "columns": [
-            "name",                   # اسم الشركة
-            "description",            # الرمز
-            "close",                  # السعر
-            "change",                 # تغير %
-            "relative_volume_10d_calc", # حجم نسبي
-            "price_earnings_ttm",     # PE
+            "name",
+            "description",
+            "close",
+            "change",
+            "relative_volume_10d_calc",
+            "price_earnings_ttm",
+            "RSI"
         ],
         "sort": {"sortBy": "change", "sortOrder": "desc"},
         "range": [0, 300]
     }
 
-    r = requests.post(url, json=payload, headers=HEADERS, timeout=15)
-
-    if r.status_code != 200:
-        st.warning(f"⚠️ تعذر جلب سوق {market}")
+    try:
+        r = requests.post(url, json=payload, headers=HEADERS, timeout=15)
+        r.raise_for_status()
+    except requests.exceptions.RequestException:
         return pd.DataFrame()
 
-    data = r.json().get("data", [])
-
     rows = []
-    for d in data:
+    for d in r.json().get("data", []):
         rows.append({
             "Symbol": d["s"],
             "Company": d["d"][1],
             "Price": d["d"][2],
             "Change %": d["d"][3],
             "Relative Volume": d["d"][4],
-            "PE": d["d"][5]
+            "PE": d["d"][5],
+            "RSI": d["d"][6]
         })
 
     return pd.DataFrame(rows)
 
 
 # =============================
-# إضافة إشارات وحالة السهم
+# التحليل والإشارات
 # =============================
 def add_signals(df):
     if df.empty:
         return df
 
-    # أعمدة افتراضية
     df["الحالة"] = "🟡 مراقبة"
     df["إشارة"] = "❌ لا"
+    df["نوع الصفقة"] = "-"
     df["سعر الدخول"] = None
     df["جني الأرباح"] = None
     df["وقف الخسارة"] = None
     df["قوة السهم"] = "🔴 ضعيف"
+    df["R/R"] = None
+    df["تقييم الصفقة"] = None
 
-    # شروط الشراء
-    strong_buy = (df["Change %"] > 2) & (df["Relative Volume"] > 1.5) & (df["PE"] < 30)
-    potential_buy = ((df["Change %"] > 1) | (df["Relative Volume"] > 1.2)) & (df["PE"] < 50)
+    # شروط مضاربة قوية
+    strong = (
+        (df["Change %"] > 2) &
+        (df["Relative Volume"] > 1.5) &
+        (df["RSI"].between(60, 75))
+    )
 
-    # تصنيف الحالة
-    df.loc[strong_buy, "الحالة"] = "⭐ قوي للشراء"
-    df.loc[potential_buy & ~strong_buy, "الحالة"] = "⚡ فرصة محتملة"
-    df.loc[df["Change %"] < 0, "الحالة"] = "🔴 ضعيف"
+    # شروط سوينق
+    swing = (
+        (df["RSI"].between(50, 59)) &
+        (df["Relative Volume"] > 1.2)
+    )
 
-    # قوة السهم
-    df.loc[strong_buy, "قوة السهم"] = "⭐ قوي"
-    df.loc[potential_buy & ~strong_buy, "قوة السهم"] = "⚡ متوسط"
+    # تصنيف
+    df.loc[strong, "الحالة"] = "🔥 قوي للشراء"
+    df.loc[strong, "إشارة"] = "🔥 شراء"
+    df.loc[strong, "نوع الصفقة"] = "مضاربة"
+    df.loc[strong, "قوة السهم"] = "⭐⭐⭐ قوي جداً"
 
-    # إشارات الدخول والجني ووقف الخسارة
-    df.loc[strong_buy, "إشارة"] = "🔥 شراء"
-    df.loc[strong_buy, "سعر الدخول"] = df["Price"]
-    df.loc[strong_buy, "جني الأرباح"] = (df["Price"] * 1.05).round(2)
-    df.loc[strong_buy, "وقف الخسارة"] = (df["Price"] * 0.975).round(2)
+    df.loc[swing & ~strong, "الحالة"] = "🟢 مناسب سوينق"
+    df.loc[swing & ~strong, "إشارة"] = "🟢 شراء"
+    df.loc[swing & ~strong, "نوع الصفقة"] = "سوينق"
+    df.loc[swing & ~strong, "قوة السهم"] = "⭐⭐ متوسط"
 
-    df.loc[potential_buy & ~strong_buy, "إشارة"] = "⚡ متابعة"
-    df.loc[potential_buy & ~strong_buy, "سعر الدخول"] = df["Price"]
-    df.loc[potential_buy & ~strong_buy, "جني الأرباح"] = (df["Price"] * 1.03).round(2)
-    df.loc[potential_buy & ~strong_buy, "وقف الخسارة"] = (df["Price"] * 0.985).round(2)
+    # أسعار التداول
+    df.loc[strong, "سعر الدخول"] = (df["Price"] * 0.995).round(2)
+    df.loc[strong, "جني الأرباح"] = (df["Price"] * 1.06).round(2)
+    df.loc[strong, "وقف الخسارة"] = (df["Price"] * 0.97).round(2)
+
+    df.loc[swing & ~strong, "سعر الدخول"] = (df["Price"] * 0.99).round(2)
+    df.loc[swing & ~strong, "جني الأرباح"] = (df["Price"] * 1.10).round(2)
+    df.loc[swing & ~strong, "وقف الخسارة"] = (df["Price"] * 0.95).round(2)
+
+    # حساب R/R
+    rr = (
+        (df["جني الأرباح"] - df["سعر الدخول"]) /
+        (df["سعر الدخول"] - df["وقف الخسارة"])
+    ).round(2)
+
+    df["R/R"] = rr
+
+    df.loc[rr >= 2, "تقييم الصفقة"] = "🔥 ممتاز"
+    df.loc[(rr >= 1.5) & (rr < 2), "تقييم الصفقة"] = "🟢 جيد"
+    df.loc[rr < 1.5, "تقييم الصفقة"] = "❌ مخاطرة عالية"
 
     return df
 
 
 # =============================
-# واجهة المستخدم
+# الواجهة
 # =============================
-st.title("📊 Dashboard الفرص المضاربية")
+st.title("📊 Dashboard الفرص الذكية")
 
-# فلتر السوق
 market_choice = st.selectbox("اختر السوق", ["السعودي", "الأمريكي"])
 
-with st.spinner(f"جلب بيانات سوق {market_choice}..."):
-    if market_choice == "السعودي":
-        df = fetch_market("ksa")
-    else:
-        df = fetch_market("america")
-
-df = add_signals(df)
+with st.spinner("جاري تحليل السوق..."):
+    df = fetch_market("ksa" if market_choice == "السعودي" else "america")
+    df = add_signals(df)
 
 if df.empty:
-    st.error("❌ لم يتم جلب أي بيانات من TradingView")
+    st.error("❌ لا توجد بيانات")
     st.stop()
 
-st.success(f"تم تحميل {len(df)} سهم")
+# =============================
+# أقوى الفرص
+# =============================
+strong_df = df[df["الحالة"] == "🔥 قوي للشراء"].sort_values("R/R", ascending=False)
 
-# عرض الجدول
-st.dataframe(df, use_container_width=True, hide_index=True)
+# حفظ يومي
+today = date.today().isoformat()
+filename = f"daily_opportunities_{today}.csv"
+
+if not strong_df.empty and not os.path.exists(filename):
+    strong_df.to_csv(filename, index=False, encoding="utf-8-sig")
+
+# =============================
+# Tabs
+# =============================
+tab_all, tab_strong = st.tabs(["📋 كل الأسهم", "🔥 أقوى الفرص الشرائية"])
+
+with tab_all:
+    st.dataframe(df, use_container_width=True, hide_index=True)
+
+with tab_strong:
+    st.dataframe(strong_df, use_container_width=True, hide_index=True)
