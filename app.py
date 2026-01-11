@@ -159,7 +159,7 @@ with tab2:
 with tab3:
     st.subheader("🧠 تحليل صفقة محددة")
     col1, col2 = st.columns(2)
-    symbol = col1.text_input("رمز السهم")
+    symbol = col1.text_input("رمز السهم (مثال: TADAWUL:1010 أو NASDAQ:AAPL)")
     buy_price = col2.number_input("سعر الشراء", min_value=0.0, step=0.01)
     if st.button("🔍 تحليل الصفقة") and symbol and buy_price > 0:
         data = fetch_single_symbol(symbol)
@@ -194,7 +194,7 @@ with tab4:
     st.subheader("📂 تتبع الصفقات المفتوحة")
     st.markdown("### إضافة صفقة جديدة")
     col1, col2, col3, col4 = st.columns(4)
-    t_symbol = col1.text_input("رمز السهم", key="trade_symbol")
+    t_symbol = col1.text_input("رمز السهم (مثال: TADAWUL:1010 أو NASDAQ:AAPL)", key="trade_symbol")
     t_buy_price = col2.number_input("سعر الشراء", min_value=0.0, step=0.01, key="trade_price")
     t_qty = col3.number_input("عدد الأسهم", min_value=1, step=1, key="trade_qty")
     t_date = col4.date_input("تاريخ الشراء", key="trade_date")
