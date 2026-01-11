@@ -162,10 +162,11 @@ with tab1:
 
 with tab2:
     strong = df[
-        (df["إشارة"] == "شراء") &
-        (df["R/R"] >= 2) &
-        (df["RSI"] < 70)
-    ].sort_values("R/R", ascending=False)
+    (df["إشارة"] == "شراء") &
+    (df["R/R"] >= 1.5) &
+    (df["RSI"] <= 75) &
+    (df["قوة السهم"].isin(["⭐⭐", "⭐⭐⭐"]))
+].sort_values("R/R", ascending=False)
 
     if strong.empty:
         st.info("لا توجد فرص قوية حالياً")
