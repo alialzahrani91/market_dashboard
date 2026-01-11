@@ -2,7 +2,6 @@ import streamlit as st
 import requests
 import pandas as pd
 from datetime import datetime
-import os
 
 st.set_page_config(page_title="Market Dashboard", layout="wide")
 
@@ -11,10 +10,8 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-TRADES_FILE = "trades.csv"
-
 # =============================
-# جلب بيانات السوق
+# جلب بيانات السوق مع حماية الأعمدة الرقمية
 # =============================
 def fetch_market(market):
     url = f"https://scanner.tradingview.com/{market}/scan"
@@ -26,31 +23,45 @@ def fetch_market(market):
             "relative_volume_10d_calc", "price_earnings_ttm"
         ],
         "sort": {"sortBy": "change", "sortOrder": "desc"},
-        "range": [0, 300]
+        "range": [0, 400]
     }
+
     r = requests.post(url, json=payload, headers=HEADERS, timeout=15)
     if r.status_code != 200:
         st.warning(f"⚠️ تعذر جلب سوق {market}")
         return pd.DataFrame()
+
     data = r.json().get("data", [])
     rows = []
     for d in data:
+        try:
+            price = float(d["d"][2]) if d["d"][2] is not None else 0
+            change = float(d["d"][3]) if d["d"][3] is not None else 0
+            rel_vol = float(d["d"][4]) if d["d"][4] is not None else 0
+            pe = float(d["d"][5]) if d["d"][5] is not None else None
+        except (ValueError, TypeError):
+            price = change = rel_vol = 0
+            pe = None
+
         rows.append({
             "Symbol": d["s"],
-            "Company": d["d"][1],
-            "Price": float(d["d"][2]),
-            "Change %": float(d["d"][3]),
-            "Relative Volume": float(d["d"][4]),
-            "PE": float(d["d"][5]) if d["d"][5] is not None else None
+            "Company": d["d"][1] if d["d"][1] else "",
+            "Price": price,
+            "Change %": change,
+            "Relative Volume": rel_vol,
+            "PE": pe
         })
+
     return pd.DataFrame(rows)
 
+
 # =============================
-# إضافة إشارات وحالة السهم
+# إشارات وحالة السهم
 # =============================
 def add_signals(df):
     if df.empty:
         return df
+
     df["الحالة"] = "🟡 مراقبة"
     df["إشارة"] = "❌ لا"
     df["سعر الدخول"] = None
@@ -58,8 +69,8 @@ def add_signals(df):
     df["وقف الخسارة"] = None
     df["قوة السهم"] = "🔴 ضعيف"
 
-    strong_buy = (df["Change %"] > 2) & (df["Relative Volume"] > 1.5) & ((df["PE"].fillna(100)) < 30)
-    potential_buy = ((df["Change %"] > 1) | (df["Relative Volume"] > 1.2)) & ((df["PE"].fillna(100)) < 50)
+    strong_buy = (df["Change %"] > 2) & (df["Relative Volume"] > 1.5) & (df["PE"] < 30)
+    potential_buy = ((df["Change %"] > 1) | (df["Relative Volume"] > 1.2)) & (df["PE"] < 50)
 
     df.loc[strong_buy, "الحالة"] = "⭐ قوي للشراء"
     df.loc[potential_buy & ~strong_buy, "الحالة"] = "⚡ فرصة محتملة"
@@ -80,165 +91,91 @@ def add_signals(df):
 
     return df
 
-# =============================
-# جلب بيانات سهم واحد
-# =============================
-def fetch_single_symbol(symbol):
-    url = "https://scanner.tradingview.com/global/scan"
-    payload = {
-        "symbols": {"tickers": [symbol], "query": {"types": []}},
-        "columns": ["close", "change", "RSI", "relative_volume_10d_calc"]
-    }
-    r = requests.post(url, json=payload, headers=HEADERS, timeout=15)
-    if r.status_code != 200:
-        return None
-    data = r.json().get("data", [])
-    if not data:
-        return None
-    d = data[0]["d"]
-    return {
-        "Price": float(d[0]),
-        "Change %": float(d[1]),
-        "RSI": float(d[2]) if d[2] is not None else None,
-        "RelVol": float(d[3]) if d[3] is not None else None
-    }
 
 # =============================
-# إدارة CSV الصفقات
+# إدارة الصفقة
 # =============================
-def load_trades():
-    if os.path.exists(TRADES_FILE):
-        df = pd.read_csv(TRADES_FILE)
-        return df.to_dict("records")
-    return []
+def analyze_trade(symbol, buy_price, current_price):
+    change_pct = ((current_price - buy_price) / buy_price) * 100
+    recommendation = "استمر بالاحتفاظ" if change_pct < 5 else "فكر في البيع"
+    return change_pct, recommendation
 
-def save_trades(trades):
-    pd.DataFrame(trades).to_csv(TRADES_FILE, index=False)
 
 # =============================
-# SESSION STATE INITIALIZATION
+# تابات التطبيق
 # =============================
-if "trades" not in st.session_state:
-    st.session_state["trades"] = load_trades()
-
-# =============================
-# واجهة المستخدم
-# =============================
-st.title("📊 Market Dashboard مع إدارة الصفقات")
-
-tab1, tab2, tab3, tab4 = st.tabs(["📊 السوق", "💪 أقوى الأسهم", "🧠 إدارة الصفقة", "📂 تتبع الصفقات"])
+tabs = ["فرص مضاربية", "أقوى الأسهم", "إدارة الصفقة", "تتبع الصفقات"]
+selected_tab = st.sidebar.selectbox("اختر التاب", tabs)
 
 # -----------------------------
-# تاب السوق
+# تاب 1: فرص مضاربية
 # -----------------------------
-with tab1:
+if selected_tab == "فرص مضاربية":
+    st.title("📊 فرص مضاربية")
     market_choice = st.selectbox("اختر السوق", ["السعودي", "الأمريكي"])
     with st.spinner(f"جلب بيانات سوق {market_choice}..."):
         df = fetch_market("ksa") if market_choice == "السعودي" else fetch_market("america")
     df = add_signals(df)
     if df.empty:
         st.error("❌ لم يتم جلب أي بيانات")
-        st.stop()
-    st.success(f"تم تحميل {len(df)} سهم")
-    st.dataframe(df, use_container_width=True, hide_index=True)
-
-# -----------------------------
-# تاب أقوى الأسهم
-# -----------------------------
-with tab2:
-    st.subheader("💪 أقوى الأسهم للشراء")
-    strong_df = df[df["الحالة"] == "⭐ قوي للشراء"]
-    if strong_df.empty:
-        st.info("لا توجد فرص قوية حالياً")
     else:
-        st.dataframe(strong_df, use_container_width=True, hide_index=True)
+        st.success(f"تم تحميل {len(df)} سهم")
+        st.dataframe(df, use_container_width=True, hide_index=True)
 
 # -----------------------------
-# تاب إدارة الصفقة
+# تاب 2: أقوى الأسهم
 # -----------------------------
-with tab3:
-    st.subheader("🧠 تحليل صفقة محددة")
-    col1, col2 = st.columns(2)
-    symbol = col1.text_input("رمز السهم (مثال: TADAWUL:1010 أو NASDAQ:AAPL)")
-    buy_price = col2.number_input("سعر الشراء", min_value=0.0, step=0.01)
-    if st.button("🔍 تحليل الصفقة") and symbol and buy_price > 0:
-        data = fetch_single_symbol(symbol)
-        if not data:
-            st.error("❌ لم يتم جلب بيانات السهم")
+elif selected_tab == "أقوى الأسهم":
+    st.title("💪 أقوى الأسهم")
+    df_sa = fetch_market("ksa")
+    df_usa = fetch_market("america")
+    df_all = pd.concat([df_sa, df_usa], ignore_index=True)
+    df_all = add_signals(df_all)
+    strong_stocks = df_all[df_all["قوة السهم"] == "⭐ قوي"]
+    st.dataframe(strong_stocks, use_container_width=True, hide_index=True)
+    if strong_stocks.empty:
+        st.info("لا توجد فرص قوية حالياً.")
+
+# -----------------------------
+# تاب 3: إدارة الصفقة
+# -----------------------------
+elif selected_tab == "إدارة الصفقة":
+    st.title("📝 إدارة الصفقة")
+    symbol_input = st.text_input("رمز السهم")
+    buy_price_input = st.number_input("سعر الشراء", min_value=0.0, format="%.2f")
+    current_price_input = st.number_input("السعر الحالي", min_value=0.0, format="%.2f")
+    if st.button("تحليل الصفقة"):
+        if symbol_input and buy_price_input > 0 and current_price_input > 0:
+            change_pct, rec = analyze_trade(symbol_input, buy_price_input, current_price_input)
+            st.write(f"🔹 التغير منذ الشراء: {change_pct:.2f}%")
+            st.write(f"🔹 التوصية: {rec}")
         else:
-            current = data["Price"]
-            rsi = data["RSI"]
-            pnl_pct = ((current - buy_price) / buy_price) * 100
-            st.markdown("### 📈 نتائج التحليل")
-            c1, c2, c3 = st.columns(3)
-            c1.metric("السعر الحالي", round(current,2))
-            c2.metric("الربح / الخسارة %", f"{pnl_pct:.2f}%")
-            c3.metric("RSI", round(rsi,1) if rsi else "N/A")
-            st.markdown("---")
-            decision = "👀 مراقبة"
-            color = "🟡"
-            if pnl_pct <= -5:
-                decision = "⛔ وقف خسارة – يفضل الخروج"; color = "🔴"
-            elif rsi and rsi > 75 and pnl_pct > 0:
-                decision = "🔴 بيع / جني أرباح"; color = "🔴"
-            elif rsi and 65 <= rsi <= 75:
-                decision = "🟡 جني أرباح جزئي"; color = "🟡"
-            elif rsi and rsi < 65 and pnl_pct >= 0:
-                decision = "🟢 استمرار – الترند إيجابي"; color = "🟢"
-            st.markdown(f"## {color} القرار: **{decision}**")
+            st.warning("يرجى إدخال جميع القيم.")
 
 # -----------------------------
-# تاب تتبع الصفقات
+# تاب 4: تتبع الصفقات
 # -----------------------------
-with tab4:
-    st.subheader("📂 تتبع الصفقات المفتوحة")
-    st.markdown("### إضافة صفقة جديدة")
-    col1, col2, col3, col4 = st.columns(4)
-    t_symbol = col1.text_input("رمز السهم (مثال: TADAWUL:1010 أو NASDAQ:AAPL)", key="trade_symbol")
-    t_buy_price = col2.number_input("سعر الشراء", min_value=0.0, step=0.01, key="trade_price")
-    t_qty = col3.number_input("عدد الأسهم", min_value=1, step=1, key="trade_qty")
-    t_date = col4.date_input("تاريخ الشراء", key="trade_date")
+elif selected_tab == "تتبع الصفقات":
+    st.title("📈 تتبع الصفقات")
+    if "trades" not in st.session_state:
+        st.session_state.trades = []
 
-    if st.button("➕ إضافة الصفقة"):
-        new_trade = {
-            "Symbol": t_symbol,
-            "Buy Price": t_buy_price,
-            "Quantity": t_qty,
-            "Date": t_date.strftime("%Y-%m-%d")
-        }
-        st.session_state.trades.append(new_trade)
-        save_trades(st.session_state.trades)
-        st.success("✅ تم إضافة الصفقة")
-
-    st.markdown("---")
-    st.markdown("### الصفقات المفتوحة")
-    trades_display = []
-    for trade in st.session_state.trades:
-        data = fetch_single_symbol(trade["Symbol"])
-        if data:
-            current = data["Price"]
-            pnl_pct = ((current - trade["Buy Price"]) / trade["Buy Price"]) * 100
-            rsi = data["RSI"]
-            decision = "👀 مراقبة"
-            if pnl_pct <= -5:
-                decision = "⛔ وقف خسارة"
-            elif rsi and rsi > 75 and pnl_pct > 0:
-                decision = "🔴 بيع"
-            elif rsi and 65 <= rsi <= 75:
-                decision = "🟡 جني أرباح جزئي"
-            elif rsi and rsi < 65 and pnl_pct >= 0:
-                decision = "🟢 استمرار"
-            trades_display.append({
-                "Symbol": trade["Symbol"],
-                "Buy Price": trade["Buy Price"],
-                "Qty": trade["Quantity"],
-                "Date": trade["Date"],
-                "Current Price": round(current, 2),
-                "PnL %": round(pnl_pct, 2),
-                "RSI": round(rsi,1) if rsi else "N/A",
-                "Decision": decision
+    with st.form("add_trade_form"):
+        symbol = st.text_input("رمز السهم")
+        buy_price = st.number_input("سعر الشراء", min_value=0.0, format="%.2f")
+        quantity = st.number_input("عدد الأسهم", min_value=1, step=1)
+        date = st.date_input("تاريخ الشراء", value=datetime.today())
+        submitted = st.form_submit_button("إضافة الصفقة")
+        if submitted and symbol and buy_price > 0:
+            st.session_state.trades.append({
+                "Symbol": symbol,
+                "Buy Price": buy_price,
+                "Quantity": quantity,
+                "Date": date
             })
-    if trades_display:
-        st.dataframe(pd.DataFrame(trades_display), use_container_width=True, hide_index=True)
-    else:
-        st.info("لا توجد صفقات حالياً")
+            st.success(f"تم إضافة الصفقة: {symbol}")
+
+    if st.session_state.trades:
+        st.subheader("📋 صفقاتك الحالية")
+        df_trades = pd.DataFrame(st.session_state.trades)
+        st.dataframe(df_trades, use_container_width=True, hide_index=True)
