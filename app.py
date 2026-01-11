@@ -1,8 +1,6 @@
 import streamlit as st
 import requests
 import pandas as pd
-from datetime import date
-import os
 
 st.set_page_config(page_title="Market Dashboard", layout="wide")
 
@@ -12,34 +10,46 @@ HEADERS = {
 }
 
 # =============================
+# أدوات مساعدة
+# =============================
+def to_numeric_safe(df, cols):
+    for c in cols:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df
+
+
+# =============================
 # جلب بيانات السوق من TradingView
 # =============================
 def fetch_market(market):
     url = f"https://scanner.tradingview.com/{market}/scan"
+
     payload = {
         "filter": [],
         "symbols": {"query": {"types": []}, "tickers": []},
         "columns": [
-            "name",
-            "description",
-            "close",
-            "change",
-            "relative_volume_10d_calc",
-            "price_earnings_ttm",
-            "RSI"
+            "name",                    # الرمز
+            "description",             # اسم الشركة
+            "close",                   # السعر
+            "change",                  # التغير %
+            "relative_volume_10d_calc",# الحجم النسبي
+            "price_earnings_ttm",      # PE
+            "RSI"                      # RSI
         ],
         "sort": {"sortBy": "change", "sortOrder": "desc"},
         "range": [0, 300]
     }
 
-    try:
-        r = requests.post(url, json=payload, headers=HEADERS, timeout=15)
-        r.raise_for_status()
-    except requests.exceptions.RequestException:
+    r = requests.post(url, json=payload, headers=HEADERS, timeout=15)
+
+    if r.status_code != 200:
+        st.warning(f"⚠️ تعذر جلب سوق {market}")
         return pd.DataFrame()
 
+    data = r.json().get("data", [])
+
     rows = []
-    for d in r.json().get("data", []):
+    for d in data:
         rows.append({
             "Symbol": d["s"],
             "Company": d["d"][1],
@@ -54,104 +64,111 @@ def fetch_market(market):
 
 
 # =============================
-# التحليل والإشارات
+# إضافة التحليل والإشارات
 # =============================
 def add_signals(df):
     if df.empty:
         return df
 
+    df = to_numeric_safe(
+        df,
+        ["Price", "Change %", "Relative Volume", "PE", "RSI"]
+    )
+
+    # أعمدة افتراضية
+    df["نوع الصفقة"] = "—"
     df["الحالة"] = "🟡 مراقبة"
     df["إشارة"] = "❌ لا"
-    df["نوع الصفقة"] = "-"
+    df["قوة السهم"] = "🔴 ضعيف"
     df["سعر الدخول"] = None
     df["جني الأرباح"] = None
     df["وقف الخسارة"] = None
-    df["قوة السهم"] = "🔴 ضعيف"
     df["R/R"] = None
-    df["تقييم الصفقة"] = None
 
-    # شروط مضاربة قوية
-    strong = (
-        (df["Change %"] > 2) &
-        (df["Relative Volume"] > 1.5) &
-        (df["RSI"].between(60, 75))
+    # ===== شروط =====
+    scalp = (
+        (df["RSI"] > 30) & (df["RSI"] < 55) &
+        (df["Change %"] > 1.5) &
+        (df["Relative Volume"] > 1.5)
     )
 
-    # شروط سوينق
     swing = (
-        (df["RSI"].between(50, 59)) &
-        (df["Relative Volume"] > 1.2)
+        (df["RSI"] >= 55) & (df["RSI"] <= 70) &
+        (df["Change %"] > 0) &
+        (df["PE"] < 40)
     )
 
-    # تصنيف
-    df.loc[strong, "الحالة"] = "🔥 قوي للشراء"
-    df.loc[strong, "إشارة"] = "🔥 شراء"
-    df.loc[strong, "نوع الصفقة"] = "مضاربة"
-    df.loc[strong, "قوة السهم"] = "⭐⭐⭐ قوي جداً"
+    # ===== مضاربة =====
+    df.loc[scalp, "نوع الصفقة"] = "⚡ مضاربة"
+    df.loc[scalp, "الحالة"] = "🔥 فرصة قوية"
+    df.loc[scalp, "إشارة"] = "شراء"
+    df.loc[scalp, "قوة السهم"] = "⭐⭐⭐"
 
-    df.loc[swing & ~strong, "الحالة"] = "🟢 مناسب سوينق"
-    df.loc[swing & ~strong, "إشارة"] = "🟢 شراء"
-    df.loc[swing & ~strong, "نوع الصفقة"] = "سوينق"
-    df.loc[swing & ~strong, "قوة السهم"] = "⭐⭐ متوسط"
+    df.loc[scalp, "سعر الدخول"] = df["Price"] * 0.995
+    df.loc[scalp, "جني الأرباح"] = df["Price"] * 1.04
+    df.loc[scalp, "وقف الخسارة"] = df["Price"] * 0.97
 
-    # أسعار التداول
-    df.loc[strong, "سعر الدخول"] = (df["Price"] * 0.995).round(2)
-    df.loc[strong, "جني الأرباح"] = (df["Price"] * 1.06).round(2)
-    df.loc[strong, "وقف الخسارة"] = (df["Price"] * 0.97).round(2)
+    # ===== سوينق =====
+    df.loc[swing & ~scalp, "نوع الصفقة"] = "📈 سوينق"
+    df.loc[swing & ~scalp, "الحالة"] = "⭐ جيدة"
+    df.loc[swing & ~scalp, "إشارة"] = "شراء"
+    df.loc[swing & ~scalp, "قوة السهم"] = "⭐⭐"
 
-    df.loc[swing & ~strong, "سعر الدخول"] = (df["Price"] * 0.99).round(2)
-    df.loc[swing & ~strong, "جني الأرباح"] = (df["Price"] * 1.10).round(2)
-    df.loc[swing & ~strong, "وقف الخسارة"] = (df["Price"] * 0.95).round(2)
+    df.loc[swing & ~scalp, "سعر الدخول"] = df["Price"] * 0.99
+    df.loc[swing & ~scalp, "جني الأرباح"] = df["Price"] * 1.08
+    df.loc[swing & ~scalp, "وقف الخسارة"] = df["Price"] * 0.94
 
-    # حساب R/R
-    rr = (
+    # ===== حساب R/R =====
+    df["R/R"] = (
         (df["جني الأرباح"] - df["سعر الدخول"]) /
         (df["سعر الدخول"] - df["وقف الخسارة"])
-    ).round(2)
+    )
 
-    df["R/R"] = rr
-
-    df.loc[rr >= 2, "تقييم الصفقة"] = "🔥 ممتاز"
-    df.loc[(rr >= 1.5) & (rr < 2), "تقييم الصفقة"] = "🟢 جيد"
-    df.loc[rr < 1.5, "تقييم الصفقة"] = "❌ مخاطرة عالية"
+    df["R/R"] = pd.to_numeric(df["R/R"], errors="coerce").round(2)
 
     return df
 
 
 # =============================
-# الواجهة
+# واجهة المستخدم
 # =============================
 st.title("📊 Dashboard الفرص الذكية")
 
-market_choice = st.selectbox("اختر السوق", ["السعودي", "الأمريكي"])
+market_choice = st.selectbox(
+    "اختر السوق",
+    ["السعودي", "الأمريكي"]
+)
 
-with st.spinner("جاري تحليل السوق..."):
-    df = fetch_market("ksa" if market_choice == "السعودي" else "america")
-    df = add_signals(df)
+with st.spinner("جلب البيانات..."):
+    if market_choice == "السعودي":
+        df = fetch_market("ksa")
+    else:
+        df = fetch_market("america")
+
+df = add_signals(df)
 
 if df.empty:
-    st.error("❌ لا توجد بيانات")
+    st.error("❌ لم يتم جلب بيانات")
     st.stop()
-
-# =============================
-# أقوى الفرص
-# =============================
-strong_df = df[df["الحالة"] == "🔥 قوي للشراء"].sort_values("R/R", ascending=False)
-
-# حفظ يومي
-today = date.today().isoformat()
-filename = f"daily_opportunities_{today}.csv"
-
-if not strong_df.empty and not os.path.exists(filename):
-    strong_df.to_csv(filename, index=False, encoding="utf-8-sig")
 
 # =============================
 # Tabs
 # =============================
-tab_all, tab_strong = st.tabs(["📋 كل الأسهم", "🔥 أقوى الفرص الشرائية"])
+tab1, tab2 = st.tabs(["📋 جميع الأسهم", "🔥 أقوى الفرص"])
 
-with tab_all:
+with tab1:
+    st.success(f"تم تحميل {len(df)} سهم")
     st.dataframe(df, use_container_width=True, hide_index=True)
 
-with tab_strong:
-    st.dataframe(strong_df, use_container_width=True, hide_index=True)
+with tab2:
+    strong = df[
+        (df["إشارة"] == "شراء") &
+        (df["R/R"] >= 2) &
+        (df["RSI"] < 70)
+    ].sort_values("R/R", ascending=False)
+
+    if strong.empty:
+        st.info("لا توجد فرص قوية حالياً")
+    else:
+        st.success(f"🔥 {len(strong)} فرصة قوية")
+        st.dataframe(strong, use_container_width=True, hide_index=True)
