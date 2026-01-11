@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import pandas as pd
 from datetime import datetime
+import os
 
 st.set_page_config(page_title="Market Dashboard", layout="wide")
 
@@ -10,8 +11,10 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
+TRADES_FILE = "trades.csv"  # ملف حفظ الصفقات
+
 # =============================
-# جلب بيانات السوق مع حماية الأعمدة الرقمية
+# جلب بيانات السوق
 # =============================
 def fetch_market(market):
     url = f"https://scanner.tradingview.com/{market}/scan"
@@ -23,7 +26,7 @@ def fetch_market(market):
             "relative_volume_10d_calc", "price_earnings_ttm"
         ],
         "sort": {"sortBy": "change", "sortOrder": "desc"},
-        "range": [0, 400]
+        "range": [0, 300]
     }
 
     r = requests.post(url, json=payload, headers=HEADERS, timeout=15)
@@ -53,7 +56,6 @@ def fetch_market(market):
         })
 
     return pd.DataFrame(rows)
-
 
 # =============================
 # إشارات وحالة السهم
@@ -91,7 +93,6 @@ def add_signals(df):
 
     return df
 
-
 # =============================
 # إدارة الصفقة
 # =============================
@@ -100,18 +101,29 @@ def analyze_trade(symbol, buy_price, current_price):
     recommendation = "استمر بالاحتفاظ" if change_pct < 5 else "فكر في البيع"
     return change_pct, recommendation
 
+# =============================
+# تحميل وحفظ الصفقات
+# =============================
+def load_trades():
+    if os.path.exists(TRADES_FILE):
+        return pd.read_csv(TRADES_FILE)
+    return pd.DataFrame(columns=["Symbol","Buy Price","Quantity","Date"])
+
+def save_trades(df):
+    df.to_csv(TRADES_FILE, index=False)
 
 # =============================
-# تابات التطبيق
+# الواجهة مع التابات العلوية
 # =============================
-tabs = ["فرص مضاربية", "أقوى الأسهم", "إدارة الصفقة", "تتبع الصفقات"]
-selected_tab = st.sidebar.selectbox("اختر التاب", tabs)
+st.title("📊 Market Dashboard")
+
+tab1, tab2, tab3, tab4 = st.tabs(["فرص مضاربية", "أقوى الأسهم", "إدارة الصفقة", "تتبع الصفقات"])
 
 # -----------------------------
 # تاب 1: فرص مضاربية
 # -----------------------------
-if selected_tab == "فرص مضاربية":
-    st.title("📊 فرص مضاربية")
+with tab1:
+    st.header("📊 فرص مضاربية")
     market_choice = st.selectbox("اختر السوق", ["السعودي", "الأمريكي"])
     with st.spinner(f"جلب بيانات سوق {market_choice}..."):
         df = fetch_market("ksa") if market_choice == "السعودي" else fetch_market("america")
@@ -125,8 +137,8 @@ if selected_tab == "فرص مضاربية":
 # -----------------------------
 # تاب 2: أقوى الأسهم
 # -----------------------------
-elif selected_tab == "أقوى الأسهم":
-    st.title("💪 أقوى الأسهم")
+with tab2:
+    st.header("💪 أقوى الأسهم")
     df_sa = fetch_market("ksa")
     df_usa = fetch_market("america")
     df_all = pd.concat([df_sa, df_usa], ignore_index=True)
@@ -139,8 +151,8 @@ elif selected_tab == "أقوى الأسهم":
 # -----------------------------
 # تاب 3: إدارة الصفقة
 # -----------------------------
-elif selected_tab == "إدارة الصفقة":
-    st.title("📝 إدارة الصفقة")
+with tab3:
+    st.header("📝 إدارة الصفقة")
     symbol_input = st.text_input("رمز السهم")
     buy_price_input = st.number_input("سعر الشراء", min_value=0.0, format="%.2f")
     current_price_input = st.number_input("السعر الحالي", min_value=0.0, format="%.2f")
@@ -155,10 +167,9 @@ elif selected_tab == "إدارة الصفقة":
 # -----------------------------
 # تاب 4: تتبع الصفقات
 # -----------------------------
-elif selected_tab == "تتبع الصفقات":
-    st.title("📈 تتبع الصفقات")
-    if "trades" not in st.session_state:
-        st.session_state.trades = []
+with tab4:
+    st.header("📈 تتبع الصفقات")
+    trades_df = load_trades()
 
     with st.form("add_trade_form"):
         symbol = st.text_input("رمز السهم")
@@ -167,15 +178,15 @@ elif selected_tab == "تتبع الصفقات":
         date = st.date_input("تاريخ الشراء", value=datetime.today())
         submitted = st.form_submit_button("إضافة الصفقة")
         if submitted and symbol and buy_price > 0:
-            st.session_state.trades.append({
+            trades_df = trades_df.append({
                 "Symbol": symbol,
                 "Buy Price": buy_price,
                 "Quantity": quantity,
                 "Date": date
-            })
+            }, ignore_index=True)
+            save_trades(trades_df)
             st.success(f"تم إضافة الصفقة: {symbol}")
 
-    if st.session_state.trades:
+    if not trades_df.empty:
         st.subheader("📋 صفقاتك الحالية")
-        df_trades = pd.DataFrame(st.session_state.trades)
-        st.dataframe(df_trades, use_container_width=True, hide_index=True)
+        st.dataframe(trades_df, use_container_width=True, hide_index=True)
